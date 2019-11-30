@@ -10,6 +10,7 @@ from setuptools import setup
 APP = ['zfsgui.py']
 DATA_FILES = ['openzfs.icns']
 OPTIONS = {
+    'dylib_excludes': ['libzfs.2.dylib', 'libnvpair.1.dylib', 'libzfs_core.1.dylib', 'libzpool.1.dylib', 'libuutil.1.dylib'],
     'iconfile':'zfsgui.icns',
     'plist': {'LSUIElement': True},
 }
