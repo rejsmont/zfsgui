@@ -50,14 +50,14 @@ source ~/src/zfsgui/env/production/bin/activate
 
 Now, let's install the python dependencies:
 
-```
+```bash
 pip install --upgrade pip
 pip install rumps cython watchdog py2app
 ```
 
 We need to build `py-libzfs` macOS branch and install it:
 
-```
+```bash
 cd ~/src/py-libzfs
 autoconf && ./configure
 sed -i '' 's/2\.7/3\.7/' ./Makefile
@@ -67,7 +67,7 @@ python setup.py install
 
 Finally, you can build the app bundle:
 
-```
+```bash
 cd ~/src/zfsgui
 python setup.py py2app
 mkdir -p ~/Applications
