@@ -21,7 +21,7 @@ sudo ./zfsgui.app/Contents/MacOS/zfsgui
 You can close the terminal window. The app will run in the tray.
 
 
-### Building the app:
+### Building the app
 
 You will need to download sources for the following libraries:
 - openzfsonosx/zfs
