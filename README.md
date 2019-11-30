@@ -1,6 +1,9 @@
 # ZFS GUI
 ZFS file system widget for MacOS
 
+
+![ZFS GUI screenshot](https://pbs.twimg.com/media/EKoFFphXUAIfD7C?format=jpg&name=medium "ZFS GUI screenshot")
+
 ### Running the app
 
 ```diff
