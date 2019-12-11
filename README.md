@@ -17,7 +17,7 @@ ZFS file system widget for MacOS
 
 To run the app, execute the following command in terminal:
 ```bash
-sudo ~/Applications/zfsgui.app/Contents/MacOS/zfsgui &
+sudo ~/Applications/zfsgui.app/Contents/MacOS/zfsgui
 ```
 You can close the terminal now - ZFSgui will continue to run in the system tray.
 
