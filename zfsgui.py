@@ -15,9 +15,7 @@ from PySide2.QtWidgets import QAction, QMenu, QWidgetAction, QVBoxLayout, QGridL
     QApplication, QSystemTrayIcon
 
 
-#disk_paths = ['/tmp/pools', '/var/run/disk/by-id']
 disk_paths = ['/var/run/disk/by-path']
-logfile = '/tmp/zfsgui.log'
 
 
 class ZfsDevEventHandler(FileSystemEventHandler, QObject):
@@ -31,6 +29,7 @@ class ZfsDevEventHandler(FileSystemEventHandler, QObject):
             self.observer.schedule(self, path, recursive=True)
 
     def on_modified(self, event):
+        logging.debug("Devices were modified...")
         self.devs_modified.emit()
 
     def start(self):
@@ -59,12 +58,12 @@ class OrderedDict(BaseOrderedDict):
                 keys.append(k)
                 values[k] = v
         if list(self.keys()) != list(keys):
-            self.clear()
-            for k in keys:
-                self[k] = values[k]
-            for k in f:
-                self[k] = f[k]
             self.updated.set()
+        self.clear()
+        for k in keys:
+            self[k] = values[k]
+        for k in f:
+            self[k] = f[k]
 
 
 class PoolWorker(QObject):
@@ -92,16 +91,19 @@ class PoolWorker(QObject):
             with self.lock:
                 self.scanning.set()
                 self.trigger.clear()
+                notify = self.notify.is_set()
+                self.notify.clear()
                 self.scan_init.emit()
                 logging.debug("Scanning " + self.type + " pools...")
                 pools = self._do_scan()
+                logging.debug("Found: " + str(pools) + " in " + str(disk_paths))
                 keys = [p.guid for p in pools]
                 with self.pools.lock:
                     okeys = list(self.pools.keys())
                     self.pools.update(zip(keys, pools))
                     if self.pools.updated.is_set():
                         self.updated.emit()
-                        if self.notify.is_set():
+                        if notify:
                             for key in keys:
                                 if key not in okeys:
                                     self.new.emit(self.pools[key])
@@ -109,7 +111,6 @@ class PoolWorker(QObject):
                         self.pools.updated.clear()
                 self.scan_finished.emit()
                 self.scanning.clear()
-                self.trigger.clear()
 
     def _do_scan(self):
         raise NotImplemented()
@@ -171,7 +172,6 @@ class MenuWorker(QObject):
     @staticmethod
     def update_menu(details=None):
         items, pools, next_action = details
-        changed = False
         with pools.lock:
             remove = []
             for key in items:
@@ -180,7 +180,6 @@ class MenuWorker(QObject):
                     submenu, action = items[key]
                     menu.removeAction(action)
                     remove.append(key)
-                    changed = True
             for key in remove:
                 items.pop(key)
             for key, pool in reversed(pools.items()):
@@ -189,9 +188,25 @@ class MenuWorker(QObject):
                     submenu = PoolMenu(pool)
                     action = menu.insertMenu(next_action, submenu)
                     items[key] = (submenu, action)
-                    changed = True
                 noop, next_action = items[key]
-        return changed
+
+    def update_details(self, worker, menus):
+        for key, pool in (worker.pools.items()):
+            submenu, action = menus[key]
+            pool_icon, importable = PoolUtils.getStatusIcon(pool)
+            status = str(pool.status).lower()
+            logging.info(str(key) + ":" + submenu.details.status.text() + ', ' + status)
+            if submenu.details.status.text() != status:
+                submenu.details.status.setText(status)
+                action.setIcon(pool_icon)
+                action.setEnabled(importable)
+            if submenu.space is not None:
+                progress = PoolUtils.getSpaceProgress(pool)
+                if submenu.space.bar.value() != progress:
+                    submenu.space.bar.setValue(progress)
+                text = PoolUtils.getSpaceText(pool)
+                if submenu.space.label.text() != text:
+                    submenu.space.label.setText(text)
 
     def update_importable_menu(self):
         with self.lock:
@@ -202,10 +217,13 @@ class MenuWorker(QObject):
         importable_action.setText("Scanning importable pools...")
 
     def update_importable_details(self):
+        if importable_pool_worker.scanning.is_set():
+            return
         if len(importable_pool_worker.pools) > 0:
             importable_action.setText("Importable pools")
         else:
             importable_action.setText("No importable pools")
+        self.update_details(importable_pool_worker, self.importable)
 
     def update_active_menu(self):
         with self.lock:
@@ -216,10 +234,13 @@ class MenuWorker(QObject):
         pass
 
     def update_active_details(self):
+        if active_pool_worker.scanning.is_set():
+            return
         if len(active_pool_worker.pools) > 0:
             active_action.setText("Active pools")
         else:
             active_action.setText("No active pools")
+        self.update_details(active_pool_worker, self.active)
 
 
 class PoolMenu(QMenu):
@@ -227,24 +248,17 @@ class PoolMenu(QMenu):
     def __init__(self, pool):
         super().__init__()
         self.setTitle(pool.name)
-        status = pool.status
-        if pool.status == 'ONLINE':
-            self.setIcon(green_icon)
-            pool_importable = True
-        elif pool.status == 'DEGRADED':
-            self.setIcon(yellow_icon)
-            pool_importable = True
-        elif pool.status in ['FAULTED', 'OFFLINE', 'UNAVAIL', 'REMOVED']:
-            self.setIcon(red_icon)
-            pool_importable = False
-        else:
-            self.setIcon(grey_icon)
-            pool_importable = False
-        self.addAction(PoolDetailsAction(pool, self))
+        pool_icon, pool_importable = PoolUtils.getStatusIcon(pool)
+        self.setIcon(pool_icon)
+        self.details = PoolDetailsAction(pool, self)
+        self.addAction(self.details)
         self.addSeparator()
         if pool.properties is not None:
-            self.addAction(PoolSpaceAction(pool, self))
+            self.space = PoolSpaceAction(pool, self)
+            self.addAction(self.space)
             self.addSeparator()
+        else:
+            self.space = None
         if isinstance(pool, ZFSImportablePool):
             action = self.addAction("Import")
             action.triggered.connect(lambda: importable_pool_worker.import_pool(pool))
@@ -263,11 +277,14 @@ class PoolDetailsAction(QWidgetAction):
         inner_layout.setSpacing(2)
         inner_layout.setContentsMargins(0, 0, 0, 3)
         inner_layout.addWidget(QLabel("Name:"), 0, 0)
-        inner_layout.addWidget(QLabel(str(pool.name)), 0, 1)
+        self.name = QLabel(str(pool.name))
+        inner_layout.addWidget(self.name, 0, 1)
         inner_layout.addWidget(QLabel("GUID:"), 1, 0)
-        inner_layout.addWidget(QLabel(str(pool.guid)), 1, 1)
+        self.guid = QLabel(str(pool.guid))
+        inner_layout.addWidget(self.guid, 1, 1)
         inner_layout.addWidget(QLabel("Status:"), 2, 0)
-        inner_layout.addWidget(QLabel(str(pool.status).lower()), 2, 1)
+        self.status = QLabel(str(pool.status).lower())
+        inner_layout.addWidget(self.status, 2, 1)
         outer_layout.addLayout(inner_layout)
         outer_layout.setContentsMargins(21, 0, 15, 0)
         outer_layout.setSpacing(0)
@@ -281,11 +298,11 @@ class PoolSpaceAction(QWidgetAction):
     def __init__(self, pool, parent):
         super().__init__(parent)
         outerLayout = QVBoxLayout()
-        bar = QProgressBar()
-        bar.setValue(int(str(pool.properties['capacity'].value).replace('%', '')))
-        outerLayout.addWidget(bar)
-        outerLayout.addWidget(QLabel("Size: " + str(pool.properties['size'].value) + ", " +
-                                     str(pool.properties['free'].value) + " free"))
+        self.bar = QProgressBar()
+        self.bar.setValue(PoolUtils.getSpaceProgress(pool))
+        outerLayout.addWidget(self.bar)
+        self.label = QLabel(PoolUtils.getSpaceText(pool))
+        outerLayout.addWidget(self.label)
         outerLayout.setContentsMargins(21, 0, 15, 0)
         outerLayout.setSpacing(0)
         widget = QWidget()
@@ -389,6 +406,7 @@ class NotificationCenter(QObject):
         self.notify('Export error', 'Error when exporting pool ' + str(pool.name), error,
                     other_button='Dismiss')
 
+
 class AppController(QObject):
 
     @staticmethod
@@ -397,6 +415,28 @@ class AppController(QObject):
         active_pool_thread.terminate()
         importable_pool_thread.terminate()
         app.quit()
+
+
+class PoolUtils:
+
+    @staticmethod
+    def getStatusIcon(pool):
+        if pool.status == 'ONLINE':
+            return green_icon, True
+        elif pool.status == 'DEGRADED':
+            return yellow_icon, True
+        elif pool.status in ['FAULTED', 'OFFLINE', 'UNAVAIL', 'REMOVED']:
+            return red_icon, False
+        else:
+            return grey_icon, False
+
+    @staticmethod
+    def getSpaceProgress(pool):
+        return int(str(pool.properties['capacity'].value).replace('%', ''))
+
+    @staticmethod
+    def getSpaceText(pool):
+        return "Size: " + str(pool.properties['size'].value) + ", " + str(pool.properties['free'].value) + " free"
 
 
 if __name__ == "__main__":
@@ -408,85 +448,81 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO)
 
-    if os.getuid() != 0:
-        logging.info("Elevating privileges...")
-        elevate(show_console=False, graphical=True)
-    else:
-        # Building the app
-        app = QApplication([])
-        app.setQuitOnLastWindowClosed(False)
-        controller = AppController()
-        icon = QIcon(os.path.join(application_path, "assets/icons.iconset/icon_128x128.png"))
-        green_icon = QIcon(os.path.join(application_path, "assets/green_dot.png"))
-        yellow_icon = QIcon(os.path.join(application_path, "assets/yellow_dot.png"))
-        red_icon = QIcon(os.path.join(application_path, "assets/red_dot.png"))
-        grey_icon = QIcon(os.path.join(application_path, "assets/grey_dot.png"))
-        tray = QSystemTrayIcon()
-        tray.setIcon(icon)
-        tray.setVisible(True)
-        nc = NotificationCenter()
+    # Building the app
+    app = QApplication([])
+    app.setQuitOnLastWindowClosed(False)
+    controller = AppController()
+    icon = QIcon(os.path.join(application_path, "assets/icons.iconset/icon_128x128.png"))
+    green_icon = QIcon(os.path.join(application_path, "assets/green_dot.png"))
+    yellow_icon = QIcon(os.path.join(application_path, "assets/yellow_dot.png"))
+    red_icon = QIcon(os.path.join(application_path, "assets/red_dot.png"))
+    grey_icon = QIcon(os.path.join(application_path, "assets/grey_dot.png"))
+    tray = QSystemTrayIcon()
+    tray.setIcon(icon)
+    tray.setVisible(True)
+    nc = NotificationCenter()
 
-        # Building menu
-        menu = QMenu()
-        importable_action = QAction("No importable pools")
-        importable_action.setDisabled(True)
-        menu.addAction(importable_action)
-        importable_separator = menu.addSeparator()
-        active_action = QAction("No active pools")
-        active_action.setDisabled(True)
-        menu.addAction(active_action)
-        active_separator = menu.addSeparator()
-        quit_action = QAction("Quit")
-        quit_action.triggered.connect(controller.quit_action_clicked)
-        menu.addAction(quit_action)
-        tray.setContextMenu(menu)
+    # Building menu
+    menu = QMenu()
+    importable_action = QAction("No importable pools")
+    importable_action.setDisabled(True)
+    menu.addAction(importable_action)
+    importable_separator = menu.addSeparator()
+    active_action = QAction("No active pools")
+    active_action.setDisabled(True)
+    menu.addAction(active_action)
+    active_separator = menu.addSeparator()
+    quit_action = QAction("Quit")
+    quit_action.triggered.connect(controller.quit_action_clicked)
+    menu.addAction(quit_action)
+    tray.setContextMenu(menu)
 
-        # Setting up scanning threads
-        active_pool_thread = QThread()
-        importable_pool_thread = QThread()
-        active_pool_thread.start()
-        importable_pool_thread.start()
-        active_pool_worker = ActivePoolWorker()
-        importable_pool_worker = ImportablePoolWorker()
-        menu_worker = MenuWorker()
-        active_pool_worker.moveToThread(active_pool_thread)
-        importable_pool_worker.moveToThread(importable_pool_thread)
+    # Setting up scanning threads
+    active_pool_thread = QThread()
+    importable_pool_thread = QThread()
+    active_pool_thread.start()
+    importable_pool_thread.start()
+    active_pool_worker = ActivePoolWorker()
+    importable_pool_worker = ImportablePoolWorker()
+    menu_worker = MenuWorker()
+    active_pool_worker.moveToThread(active_pool_thread)
+    importable_pool_worker.moveToThread(importable_pool_thread)
 
-        # Setting up timers
-        timer = QTimer()
-        timer.timeout.connect(active_pool_worker.scan)
-        timer.timeout.connect(active_pool_worker.trigger.set)
-        timer.timeout.connect(importable_pool_worker.scan)
-        timer.start(1000)
-        dev_handler = ZfsDevEventHandler()
-        dev_handler.devs_modified.connect(importable_pool_worker.notify.set)
-        dev_handler.start()
+    # Setting up timers
+    timer = QTimer()
+    timer.timeout.connect(active_pool_worker.scan)
+    timer.timeout.connect(active_pool_worker.trigger.set)
+    timer.timeout.connect(importable_pool_worker.scan)
+    timer.start(1000)
+    dev_handler = ZfsDevEventHandler()
+    dev_handler.devs_modified.connect(importable_pool_worker.notify.set)
+    dev_handler.start()
 
-        # Setting scanning events
-        active_pool_worker.scan_init.connect(menu_worker.active_scan_running)
-        active_pool_worker.scan_finished.connect(menu_worker.update_active_details)
-        active_pool_worker.updated.connect(menu_worker.update_active_menu)
-        active_pool_worker.updated.connect(importable_pool_worker.trigger.set)
-        active_pool_worker.export_success.connect(nc.notify_exported)
-        active_pool_worker.export_success.connect(active_pool_worker.trigger.set)
-        active_pool_worker.export_success.connect(importable_pool_worker.trigger.set)
-        active_pool_worker.export_error.connect(nc.notify_export_error)
-        active_pool_worker.export_error.connect(active_pool_worker.trigger.set)
-        active_pool_worker.export_error.connect(importable_pool_worker.trigger.set)
+    # Setting scanning events
+    active_pool_worker.scan_init.connect(menu_worker.active_scan_running)
+    active_pool_worker.scan_finished.connect(menu_worker.update_active_details)
+    active_pool_worker.updated.connect(menu_worker.update_active_menu)
+    active_pool_worker.updated.connect(importable_pool_worker.trigger.set)
+    active_pool_worker.export_success.connect(nc.notify_exported)
+    active_pool_worker.export_success.connect(active_pool_worker.trigger.set)
+    active_pool_worker.export_success.connect(importable_pool_worker.trigger.set)
+    active_pool_worker.export_error.connect(nc.notify_export_error)
+    active_pool_worker.export_error.connect(active_pool_worker.trigger.set)
+    active_pool_worker.export_error.connect(importable_pool_worker.trigger.set)
 
-        importable_pool_worker.scan_init.connect(menu_worker.importable_scan_running)
-        importable_pool_worker.scan_finished.connect(menu_worker.update_importable_details)
-        importable_pool_worker.updated.connect(menu_worker.update_importable_menu)
-        importable_pool_worker.updated.connect(active_pool_worker.trigger.set)
-        importable_pool_worker.new.connect(nc.notify_importable)
-        importable_pool_worker.import_success.connect(nc.notify_imported)
-        importable_pool_worker.import_success.connect(active_pool_worker.trigger.set)
-        importable_pool_worker.import_success.connect(importable_pool_worker.trigger.set)
-        importable_pool_worker.import_error.connect(nc.notify_import_error)
-        importable_pool_worker.import_error.connect(active_pool_worker.trigger.set)
-        importable_pool_worker.import_error.connect(importable_pool_worker.trigger.set)
+    importable_pool_worker.scan_init.connect(menu_worker.importable_scan_running)
+    importable_pool_worker.scan_finished.connect(menu_worker.update_importable_details)
+    importable_pool_worker.updated.connect(menu_worker.update_importable_menu)
+    importable_pool_worker.updated.connect(active_pool_worker.trigger.set)
+    importable_pool_worker.new.connect(nc.notify_importable)
+    importable_pool_worker.import_success.connect(nc.notify_imported)
+    importable_pool_worker.import_success.connect(active_pool_worker.trigger.set)
+    importable_pool_worker.import_success.connect(importable_pool_worker.trigger.set)
+    importable_pool_worker.import_error.connect(nc.notify_import_error)
+    importable_pool_worker.import_error.connect(active_pool_worker.trigger.set)
+    importable_pool_worker.import_error.connect(importable_pool_worker.trigger.set)
 
-        active_pool_worker.trigger.set()
-        importable_pool_worker.trigger.set()
+    active_pool_worker.trigger.set()
+    importable_pool_worker.trigger.set()
 
-        app.exec_()
+    app.exec_()

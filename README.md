@@ -1,4 +1,4 @@
-# ZFS GUI
+# ZFSgui
 ZFS file system widget for MacOS
 
 
@@ -15,7 +15,11 @@ ZFS file system widget for MacOS
 - as root, but currently everything is run with elevated privileged.
 ```
 
-The application will ask you to authenticate as an administrator.
+To run the app, execute the following command in terminal:
+```bash
+sudo ~/Applications/zfsgui.app/Contents/MacOS/zfsgui &
+```
+You can close the terminal now - ZFSgui will continue to run in the system tray.
 
 ### Building the app
 
