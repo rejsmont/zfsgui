@@ -1,4 +1,4 @@
-# ZFS GUI
+# ZFSgui
 ZFS file system widget for MacOS
 
 
@@ -15,14 +15,11 @@ ZFS file system widget for MacOS
 - as root, but currently everything is run with elevated privileged.
 ```
 
-To run the app, locate the folder where the app bundle is located, open the terminal and execute the following:
-
+To run the app, execute the following command in terminal:
 ```bash
-sudo ./zfsgui.app/Contents/MacOS/zfsgui
+sudo ~/Applications/zfsgui.app/Contents/MacOS/zfsgui
 ```
-
-You can close the terminal window. The app will run in the tray.
-
+You can close the terminal now - ZFSgui will continue to run in the system tray.
 
 ### Building the app
 
@@ -32,9 +29,10 @@ You will need to download sources for the following libraries:
 and install the following python dependencies:
 
 - Cython (from pip)
-- rumps (from pip)
+- PyInstaller (from pip)
+- pyobjc-framework-Cocoa (from pip)
+- PySide2 (from pip)
 - watchdog (from pip)
-- py2app (from pip)
 - rejsmont/py-libzfs (after #72 PR, freenas/py-libzfs)
 
 First, download the sources and prepare the python environment:
@@ -55,7 +53,7 @@ Now, let's install the python dependencies:
 
 ```bash
 pip install --upgrade pip
-pip install rumps cython watchdog py2app
+pip install cython pyobjc-framework-Cocoa pyinstaller pyside2 watchdog 
 ```
 
 We need to build `py-libzfs` macOS branch and install it:
@@ -72,7 +70,7 @@ Finally, you can build the app bundle:
 
 ```bash
 cd ~/src/zfsgui
-python setup.py py2app
+pyinstaller zfsgui.spec
 mkdir -p ~/Applications
 cp -rv dist/zfsgui.app ~/Applications
 ```
