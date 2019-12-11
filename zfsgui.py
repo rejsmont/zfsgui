@@ -1,7 +1,6 @@
 import logging, os, sys
 
 from collections import OrderedDict as BaseOrderedDict
-from elevate import elevate
 from libzfs import ZFSImportablePool, ZFS, ZFSException
 from multiprocessing import Lock
 from threading import Event

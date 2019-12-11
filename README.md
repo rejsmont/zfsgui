@@ -29,7 +29,6 @@ You will need to download sources for the following libraries:
 and install the following python dependencies:
 
 - Cython (from pip)
-- elevate (from pip)
 - PyInstaller (from pip)
 - pyobjc-framework-Cocoa (from pip)
 - PySide2 (from pip)
